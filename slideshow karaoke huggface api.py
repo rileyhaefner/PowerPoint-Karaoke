@@ -57,7 +57,7 @@ def generate_image(prompt, num):
     resp.raise_for_status()
     return base64.b64encode(resp.content).decode("utf-8")
 
-
+# used Claude to build the build_html function below
 def build_html(topic, slides):
     cards = []
     for i, s in enumerate(slides):
@@ -112,7 +112,8 @@ def build_html(topic, slides):
   function goBack() {{
     if (cur > 0) showSlide(cur - 1);
   }}
-
+#meant to be arrow keys to change slides
+#Will try to fix so it is compatible with school laptops
   document.addEventListener("keydown", function(e) {{
     if (e.key === "ArrowRight") goNext();
     if (e.key === "ArrowLeft") goBack();
