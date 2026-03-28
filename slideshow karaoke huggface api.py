@@ -1,0 +1,156 @@
+import os
+import json
+import base64
+
+import requests
+import webbrowser
+import tempfile
+
+num_slides = 5
+text_api_url = "https://router.huggingface.co/v1/chat/completions"
+image_api_url = "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell"
+text_model = "zai-org/GLM-5:novita"
+
+headers = {"Authorization": f"Bearer {os.environ['HF_TOKEN']}"}
+
+
+def generate_slide_text(topic):
+    print("  Generating slide content...")
+    system_prompt = f"""You are a presentation writer.
+Return ONLY a JSON array of exactly {num_slides} objects.
+Each object has: "title": short slide title, "body": 2-3 sentences of content, "imagePrompt": a visual scene for image generation, no text in image, No markdown, no explanation. Just the JSON array."""
+
+    resp = requests.post(
+        text_api_url,
+        headers={**headers, "Content-Type": "application/json"},
+        json={
+            "model": text_model,
+            "max_tokens": 2000,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f'Make a {num_slides}-slide presentation about: "{topic}"'}
+            ]
+        }
+    )
+    resp.raise_for_status()
+    raw = resp.json()["choices"][0]["message"]["content"].strip()
+
+    if "```" in raw:
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+
+    try:
+        return json.loads(raw.strip())
+    except json.JSONDecodeError:
+        start, end = raw.find("["), raw.rfind("]") + 1
+        return json.loads(raw[start:end])
+
+
+def generate_image(prompt, num):
+    print(f"  Generating image {num}/{num_slides}...")
+    resp = requests.post(
+        image_api_url,
+        headers={**headers, "Content-Type": "application/json"},
+        json={"inputs": prompt}
+    )
+    resp.raise_for_status()
+    return base64.b64encode(resp.content).decode("utf-8")
+
+
+def build_html(topic, slides):
+    cards = []
+    for i, s in enumerate(slides):
+        img = f'<img src="data:image/jpeg;base64,{s["imageB64"]}" width="500" alt="">' if s.get("imageB64") else ""
+        active = "" if i != 0 else ""
+        hidden = "" if i == 0 else 'style="display:none"'
+        title = s.get("title", "").replace("<", "&lt;")
+        body = s.get("body", "").replace("<", "&lt;")
+        cards.append(f"""<div id="s{i}" {hidden}>
+  <h2>{i+1}. {title}</h2>
+  {img}
+  <p>{body}</p>
+</div>""")
+
+    slides_html = "\n".join(cards)
+    total = len(slides)
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>{topic}</title>
+</head>
+<body>
+
+<h3>{topic} &nbsp; <span id="counter">1 / {total}</span></h3>
+<hr>
+
+{slides_html}
+
+<br>
+<button onclick="goBack()">Back</button>
+<button onclick="goNext()">Next</button>
+
+<script>
+  var cur = 0;
+  var total = {total};
+
+  function showSlide(index) {{
+    for (var i = 0; i < total; i++) {{
+      document.getElementById("s" + i).style.display = "none";
+    }}
+    document.getElementById("s" + index).style.display = "block";
+    document.getElementById("counter").textContent = (index + 1) + " / " + total;
+    cur = index;
+  }}
+
+  function goNext() {{
+    if (cur < total - 1) showSlide(cur + 1);
+  }}
+
+  function goBack() {{
+    if (cur > 0) showSlide(cur - 1);
+  }}
+
+  document.addEventListener("keydown", function(e) {{
+    if (e.key === "ArrowRight") goNext();
+    if (e.key === "ArrowLeft") goBack();
+  }});
+</script>
+</body>
+</html>"""
+
+
+def main():
+    print("\nSlideshow Karaoke")
+    print("-" * 30)
+    topic = input("Topic: ").strip()
+    if not topic:
+        print("No topic entered. Exiting.")
+        return
+
+    print()
+    slides = generate_slide_text(topic)
+
+    for i, slide in enumerate(slides):
+        try:
+            slide["imageB64"] = generate_image(slide.get("imagePrompt", topic), i + 1)
+        except Exception as e:
+            print(f"  Image {i+1} failed: {e}")
+            slide["imageB64"] = ""
+
+    html = build_html(topic, slides)
+
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".html", delete=False, encoding="utf-8")
+    tmp.write(html)
+    tmp.close()
+
+    print("\npresentation opened.")
+    webbrowser.open(f"file://{tmp.name}")
+
+
+if __name__ == "__main__":
+    main()
+
+
